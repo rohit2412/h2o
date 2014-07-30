@@ -660,7 +660,7 @@ public final class H2O {
   // A standard FJ Pool, with an expected priority level.
   private static class ForkJoinPool2 extends ForkJoinPool {
     final int _priority;
-    private ForkJoinPool2(int p, int cap) { super(NUMCPUS,new FJWThrFact(cap),null,p<MIN_HI_PRIORITY); _priority = p; }
+    private ForkJoinPool2(int p, int cap) { super(10*NUMCPUS, new FJWThrFact(cap), null, p < MIN_HI_PRIORITY); _priority = p; }
     private H2OCountedCompleter poll2() { return (H2OCountedCompleter)pollSubmission(); }
   }
 

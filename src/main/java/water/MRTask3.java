@@ -140,6 +140,8 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
         MRTask3._commBuffer.put(_taskId, new ConcurrentHashMap<Integer, double[][]>());
         MRTask3._commBufferEmpty.put(_taskId, new ConcurrentHashMap<Integer, Semaphore>());
         MRTask3._commBufferFull.put(_taskId, new ConcurrentHashMap<Integer, Semaphore>());
+        MRTask3._commCurrStartB.put(_taskId, new ConcurrentHashMap<Integer, Integer>());
+        MRTask3._commCurrLenB.put(_taskId, new ConcurrentHashMap<Integer, Integer>());
     } // load the vecs in non-racy way (we will definitely need them and in case we don;t have cached version there will be unnecessary racy update from multiple maps at the same time)!
     /** Override to do any remote cleaning on the last remote instance of
      *  this object, for disposing of node-local shared data structures.
@@ -148,6 +150,8 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
         MRTask3._commBuffer.remove(_taskId);
         MRTask3._commBufferEmpty.remove(_taskId);
         MRTask3._commBufferFull.remove(_taskId);
+        MRTask3._commCurrStartB.remove(_taskId);
+        MRTask3._commCurrLenB.remove(_taskId);
     }
 
     /** Internal field to track a range of remote nodes/JVMs to work on */
@@ -458,6 +462,9 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
     public transient double[][] _commData;
     public static HashMap<Integer, ConcurrentHashMap<Integer, Semaphore>> _commBufferEmpty = new HashMap<Integer, ConcurrentHashMap<Integer, Semaphore>>();
     public static HashMap<Integer, ConcurrentHashMap<Integer, Semaphore>> _commBufferFull = new HashMap<Integer, ConcurrentHashMap<Integer, Semaphore>>();
+    public static HashMap<Integer, ConcurrentHashMap<Integer, Integer>> _commCurrStartB = new HashMap<Integer, ConcurrentHashMap<Integer, Integer>>();
+    public static HashMap<Integer, ConcurrentHashMap<Integer, Integer>> _commCurrLenB = new HashMap<Integer, ConcurrentHashMap<Integer, Integer>>();
+    public int _currStartB, _currLenB;
 
     // Initialize HashMaps in the default empty stage
     private static synchronized void initHashMap(int _taskId, int _lo){
@@ -489,10 +496,13 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
 
     class DataSender<T extends DataSender> extends DTask {
         int chunkToComm, taskId; double[][] commData;
-        public DataSender(int chunkToComm, int taskId, double[][] commData) {
+        int startB, lenB;
+        public DataSender(int chunkToComm, int taskId, double[][] commData, int startB, int lenB) {
             this.chunkToComm=chunkToComm;
             this.taskId=taskId;
             this.commData=commData;
+            this.startB=startB;
+            this.lenB=lenB;
         }
         @Override
         public void compute2() {
@@ -500,6 +510,8 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
                 MRTask3.initHashMap(taskId, chunkToComm);
                 MRTask3._commBufferEmpty.get(taskId).get(chunkToComm).acquire();
                 MRTask3._commBuffer.get(taskId).put(chunkToComm, commData);
+                MRTask3._commCurrStartB.get(taskId).put(chunkToComm, startB);
+                MRTask3._commCurrLenB.get(taskId).put(chunkToComm, lenB);
                 MRTask3._commBufferFull.get(taskId).get(chunkToComm).release();
             } catch (InterruptedException e) {
                 e.printStackTrace();
@@ -513,8 +525,9 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
             final int chunkToComm = (_lo==0) ? (_nChunksA -1) : (_lo-1);
             H2ONode nodeToComm = _fr.anyVec().chunkKey(chunkToComm).home_node();
 
-            if (nodeToComm.index() == H2O.SELF.index()) {new DataSender (chunkToComm, _taskId, getCommData(round)).compute2();}
-            else { new RPC(nodeToComm, new DataSender (chunkToComm, _taskId, getCommData(round))).call();}
+
+            if (nodeToComm.index() == H2O.SELF.index()) {new DataSender (chunkToComm, _taskId, getCommData(round), _currStartB, _currLenB).compute2();}
+            else { new RPC(nodeToComm, new DataSender (chunkToComm, _taskId, getCommData(round), _currStartB, _currLenB)).call();}
 
             MRTask3._commBufferFull.get(_taskId).get(_lo).acquire();
             double[][] buffer = _commBuffer.get(_taskId).get(_lo);
@@ -524,6 +537,8 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
                     _commData[x][y] = buffer[x][y];
                 }
             }
+            _currStartB = _commCurrStartB.get(_taskId).get(_lo);
+            _currLenB = _commCurrLenB.get(_taskId).get(_lo);
             MRTask3._commBufferEmpty.get(_taskId).get(_lo).release();
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -598,10 +613,8 @@ public abstract class MRTask3<T extends MRTask3<T>> extends DTask implements Clo
                         if (true) map(bvs, appendableChunks[0], appendableChunks[1]);
                     }
                     map(bvs, appendableChunks);
-
                     if (_numRoundsB > 1 && _frs!=null && _frs.length>1) {
-                        int newLoB = ((round + _lo) < _numRoundsB) ? (round + _lo) : (round + _lo - _numRoundsB);
-                        map(bvs, appendableChunks, (int) _frs[1].anyVec().chunk2StartElem(newLoB), _frs[1].anyVec().chunkLen(newLoB));
+                        map(bvs, appendableChunks, _currStartB, _currLenB);
                         if (round < _numRoundsB - 1) {
                             communicateToNeighbor(round + 1);
                         }

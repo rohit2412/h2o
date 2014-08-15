@@ -797,7 +797,7 @@ public final class H2O {
     public int pparse_limit = Integer.MAX_VALUE;
     public String no_requests_log = null; // disable logging of Web requests
     public boolean check_rest_params = true; // enable checking unused/unknown REST params e.g., -check_rest_params=false disable control of unknown rest params
-    public int    nthreads=4*NUMCPUS; // Max number of F/J threads in each low-priority batch queue
+    public int    nthreads=10*NUMCPUS; // Max number of F/J threads in each low-priority batch queue
     public String license; // License file
     public String h = null;
     public String help = null;

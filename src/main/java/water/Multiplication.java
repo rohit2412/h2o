@@ -3,6 +3,7 @@ package water;
 import water.fvec.Chunk;
 import water.fvec.Frame;
 import water.fvec.NewChunk;
+import water.fvec.Vec;
 
 /**
  * Created by bhatia13 on 7/23/14.
@@ -11,30 +12,30 @@ public class Multiplication extends MRTask3<Multiplication> {
 
     @Override
     public Multiplication  doAll(Frame[] fr){
-        //Transpose the second matrix to do multiplication row by row
-        fr[1] = new Transpose().doAll( new Frame[]{fr[1]}, true, 1).outputFrame(null, null);
-
-        //Swap the matrix with less chunks in front, Noting if the output is transposed in the process
-        boolean isOutputTransposed=false;
-        if ( fr[0].anyVec().nChunks() > fr[1].anyVec().nChunks() ) {
-            Frame tempFr = fr[1]; fr[1]=fr[0]; fr[0]=tempFr; isOutputTransposed=true;
-        }
-
-        int numOutputs = isOutputTransposed ? 0 : (int)fr[1].numRows();
-        return doAll(numOutputs, fr, false, fr[1].anyVec().nChunks(), isOutputTransposed);
+        int numOutputs = (int)fr[1].numCols();
+        return doAll(numOutputs, fr, false, fr[0].anyVec().nChunks(), false);
     }
 
     @Override public void setupCommData(int newLoB){
         try {
-            Chunk bvs[] = new Chunk[_frs[1].numCols()];
-            for (int i = 0; i < _frs[1].numCols(); i++) {
-                bvs[i] = _frs[1].vecs()[i].chunkForChunkIdx(newLoB);
+            int bcolPerAchunk = (int)Math.floor((float)_frs[1].numCols()/_frs[0].anyVec().nChunks());
+            _currStartB = newLoB * bcolPerAchunk;
+            _currLenB = (newLoB==_frs[1].numCols()-1) ? (_frs[1].numCols()-bcolPerAchunk*(_frs[1].numCols()-1)) : bcolPerAchunk;
+
+            Chunk[][] bvs = new Chunk[_currLenB][_frs[1].anyVec().nChunks()];
+            for (int i = _currStartB; i < _currStartB+_currLenB; i++) {
+                Vec v = _frs[1].vec(i);
+                for (int j = 0; j<_frs[1].anyVec().nChunks(); j++) {
+                    bvs[i-_currStartB][j] = v.chunkForChunkIdx(j);
+                }
             }
 
-            _commData = new double[bvs[0]._len][_frs[1].numCols()];
-            for (int i = 0; i < _commData.length; i++) {
-                for (int j = 0; j < _commData[0].length; j++) {
-                    _commData[i][j] = bvs[j].at0(i);
+            _commData = new double[_currLenB][(int)_frs[1].numRows()];
+            for (int i = 0; i < bvs.length; i++) {
+                for (int j = 0; j < bvs[0].length; j++) {
+                    int chunkStart=(int)bvs[i][j]._start;
+                    for (int k=0; k<bvs[i][j]._len; k++)
+                        _commData[i][chunkStart+k] = bvs[i][j].at0(k);
                 }
             }
         } catch (ArrayIndexOutOfBoundsException e){
@@ -46,10 +47,6 @@ public class Multiplication extends MRTask3<Multiplication> {
     /* Data to pass to the predecesser chunk. Thread with Chunk 0 has to pass a suitable chunk.
      */
     public double[][] getCommData(int round){
-        if (_lo==0) {
-            int newLoB = ( (round+_nChunksA-1) <  _numRoundsB )  ?  (round+_nChunksA-1)  :  (round+_nChunksA - 1 - _numRoundsB);
-            setupCommData(newLoB);
-        }
         return _commData;
     }
 
@@ -61,8 +58,7 @@ public class Multiplication extends MRTask3<Multiplication> {
                 for ( int col = 0; col < chunks.length; col++) {
                          value += (chunks[col].at0(rowA) * _commData[rowB][col]);
                 }
-                if (isOutputTransposed) addToOutputVec(rowB, value);
-                else newChunks[startElemChunkB+rowB].addNum(value);
+                newChunks[startElemChunkB+rowB].addNum(value);
             }
         }
     }
